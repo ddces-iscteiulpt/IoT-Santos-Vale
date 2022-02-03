@@ -9,23 +9,23 @@ char ssid[] = SECRET_SSID;         // your network SSID (name)
 char pass[] = SECRET_PASS;         // your network password (use for WPA, or use as key for WEP)
 char usermqtt[] = SECRET_USERMQTT; // your mqtt user
 char passmqtt[] = SECRET_PASSMQTT; // your mqtt pass
+char broker[] = MQTT_BROKER;
+int  port     = MQTT_PORT;
+char topic[]  = MQTT_TOPIC;
+const long interval = TIMER2SEND * 60 * 1000;
 
-const char broker[] = "254b9725724f482ab753684a1d4208c1.s2.eu.hivemq.cloud";
-int        port     = 8883;
-const char topic[]  = "lab707/arduino/simple";
-
-const long interval = 60000;
-unsigned long previousMillis = 0;
-
-int count = 0;
-
+char unidades_medida[] = MEASUREMENT_TYPE;
 EnergyMonitor emon1;
+int    pin_emon1 = EMON_PIN_1;
+double calibration_emon1 = EMON_CALI_1;
 EnergyMonitor emon2;
+int    pin_emon2 = EMON_PIN_2;
+double calibration_emon2 = EMON_CALI_2;
 EnergyMonitor emon3;
+int    pin_emon3 = EMON_PIN_3;
+double calibration_emon3 = EMON_CALI_3;
 
-int amostras; //numero de amostras recolhidas antes de enviar
-
-int Vrms = 230;
+int Vrms = VOLT;
 double Energy = 0;
 
 String Energy_KWh;
@@ -40,6 +40,13 @@ uint32_t IRMS1;
 uint32_t IRMS2;
 uint32_t IRMS3;
 
+unsigned long previousMillis = 0;
+int count = 0;
+int amostras; //numero de amostras recolhidas antes de enviar
+int ind = 6;   //indice de trnsmição 6x10 = 60min (medições de corrente de 1h)
+
+String msg;
+
 void setup() {
   //Initialize serial and wait for port to open:
   Serial.begin(115200);
@@ -51,20 +58,21 @@ void setup() {
 
   /*Calibração dos valores //////////////////////////////////////////////////////////////////////////////////////////*/
   /*analogReadResolution é a resolução das entradas ADC, varia com o tipo de transformador quando usado no MKR 1300*
-    .current(entrada_ADC, valor calibração) */
-  //analogReadResolution(9);
-  emon1.current(1, 111);             // Current: input pin, calibration.
-  emon2.current(3, 111);             // Current: input pin, calibration.
-  emon3.current(5, 111);             // Current: input pin, calibration. 
+    .current(entrada_ADC, valor calibração) */ //analogReadResolution(9);  
+  emon1.current(pin_emon1, calibration_emon1);             // Current: input pin, calibration.
+  emon2.current(pin_emon2, calibration_emon2);             // Current: input pin, calibration.
+  emon3.current(pin_emon3, calibration_emon3);             // Current: input pin, calibration. 
   /*Calibração dos valores //////////////////////////////////////////////////////////////////////////////////////////*/
 
   /*  Calibração inicial e envio do 1º valor  */
   for (int i = 1; i <= 10; i++) {
-    dataMonitor();
+    dataEnergyMonitor();
   }
   /*  Calibração inicial e envio do 1º valor  */
 
   Energy_KWh  =   String("0")   +   String("E");       //1º valor a receber de energia é sempre 0, memopoint na database
+
+  sendDataMQTT();
 }
 
 void loop() {
@@ -75,25 +83,14 @@ void loop() {
   // avoid having delays in loop, we'll use the strategy from BlinkWithoutDelay
   // see: File -> Examples -> 02.Digital -> BlinkWithoutDelay for more info
   unsigned long currentMillis = millis();
+
+  dataEnergyMonitor();
   
-  if (currentMillis - previousMillis >= interval) {
+  if (currentMillis - previousMillis >= interval) {    
     // save the last time a message was sent
     previousMillis = currentMillis;
-
-    Serial.print("Sending message to topic: ");
-    Serial.println(topic);
-    Serial.print("hello ");
-    Serial.println(count);
-
-    // send message, the Print interface can be used to set the message contents
-    mqttClient.beginMessage(topic);
-    mqttClient.print("hello ");
-    mqttClient.print(count);
-    mqttClient.endMessage();
-
-    Serial.println();
-
-    count++;
+    Serial.println(previousMillis / 1000);
+    sendDataMQTT();
   }
 }
 
@@ -107,8 +104,7 @@ void connect_wifi()
     Serial.print(".");
     delay(5000);
   }
-
-  Serial.println("You're connected to the network");
+  Serial.println("You're connected to the Wi-Fi network");
   Serial.println();
 }
 
@@ -137,7 +133,7 @@ void connect_mqtt()
 
 
 /* ___________________________________________________________________________________________________________________________________ */
-void dataMonitor() {
+void dataEnergyMonitor() {
 
   amostras++;
   
@@ -159,13 +155,13 @@ void dataMonitor() {
   double Power = (Watt1 + Watt2 + Watt3);
 
   Energy = Energy + Power;
-/*
-  if (ind == 6 && time_running >= SEND_LOOP)
+
+  if (ind == 6 )
   {
     Energy = Energy / amostras;  
   }
-/*Serial.print("Teste indices: ind = ");
-  Serial.print(ind);*/
+  Serial.print("Teste indices: ind = ");
+  Serial.print(ind);
   Serial.print(" amostra = ");
   Serial.println(amostras);
   
@@ -186,15 +182,46 @@ void dataMonitor() {
   IRMS2     =   Irms2     *   100;
   IRMS3     =   Irms3     *   100;
 
-  Energy_KWh  =   String(ENERGY)   +   String("E");
-  Power_KW    =   String(POWER)    +   String("P");
-  ACPhase_1   =   String(IRMS1)    +   String("X");
-  ACPhase_2   =   String(IRMS2)    +   String("Y");
-  ACPhase_3   =   String(IRMS3)    +   String("Z");
+  Energy_KWh  =   String(ENERGY)   +   unidades_medida[0];
+  Power_KW    =   String(POWER)    +   unidades_medida[1];
+  ACPhase_1   =   String(IRMS1)    +   unidades_medida[2];
+  ACPhase_2   =   String(IRMS2)    +   unidades_medida[3];
+  ACPhase_3   =   String(IRMS3)    +   unidades_medida[4];
  
   /*total de kW, para passar para kWh é só dividir este valor pelo numero de intervalo de medições por hora,
     ou seja, se medir de minuto a minuto é dividir por 60.
     O ideal é mesmo meter a dividir por 60 aqui para enviar logo kWh que é a unidade padrão,
     de momento a divisão por 60 é feita no servidor*/
 
+}/* ___________________________________________________________________________________________________________________________________ */
+
+/* ___________________________________________________________________________________________________________________________________ */
+void sendDataMQTT()
+{
+  /* Envia um string com o valor da sequencia e o total de kW - "SEQ;KW"
+    Ideal é enviar 4 ou 8 bytes em vez de string para gastar menos, ver código base do MKR 1300, que tem lá como enviar os pacotes em byte*/
+    
+  if (ind == 6) {
+    msg = Energy_KWh + Power_KW + ACPhase_1 + ACPhase_2 + ACPhase_3;
+    amostras = 0;
+    Energy = 0;     ////////////????????????????    
+    ind = 1;     
+  }
+  else {
+    msg =  Power_KW + ACPhase_1 + ACPhase_2 + ACPhase_3;  
+  }
+ 
+    Serial.print("Sending message to topic: ");
+    Serial.println(topic);
+    Serial.print("msg = ");
+    Serial.println(msg);
+
+    // send message, the Print interface can be used to set the message contents
+    mqttClient.beginMessage(topic);
+    mqttClient.print(msg);
+    mqttClient.endMessage();
+
+    Serial.println();
+
+    count++;
 }/* ___________________________________________________________________________________________________________________________________ */
